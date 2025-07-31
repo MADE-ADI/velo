@@ -643,9 +643,7 @@ export default function VirtualAIAgentClient() {
             {/* Character Avatar - Full Size Rectangular Box */}
             <div className="flex items-center justify-center w-full h-auto">
               <div 
-                className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-[500px] lg:h-[550px] flex items-center justify-center transition-all duration-500 ${
-                  !isConnected ? 'blur-sm' : 'blur-0'
-                }`}
+                className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-[70vh] lg:h-[80vh] flex items-center justify-center transition-all duration-500 ${!isConnected ? 'blur-sm' : 'blur-0'}`}
                 style={{ 
                   backgroundImage: agent?.presenter?.thumbnail ? `url(${agent.presenter.thumbnail})` : undefined,
                   backgroundSize: 'cover',
@@ -720,33 +718,7 @@ export default function VirtualAIAgentClient() {
       </div>
 
       {/* Bottom Character Selection */}
-      <div className="relative z-10 flex items-center justify-center space-x-4 pb-6">
-        {characters.map((character) => (
-          <Button
-            key={character.id}
-            variant="ghost"
-            size="icon"
-            onClick={() => setSelectedCharacter(character.id)}
-            className={`w-12 h-12 rounded-full p-0 ${
-              selectedCharacter === character.id ? "ring-2 ring-[#3533CD]" : ""
-            }`}
-          >
-            <Avatar className="w-10 h-10">
-              <AvatarImage src={character.avatar || "/placeholder.svg"} />
-              <AvatarFallback>{character.name[0]}</AvatarFallback>
-            </Avatar>
-          </Button>
-        ))}
 
-        <Button variant="ghost" size="icon" className="w-12 h-12 rounded-full bg-[#3533CD] hover:bg-[#3533CD]/80">
-          <Plus className="h-6 w-6 text-white" />
-        </Button>
-
-        <Button variant="outline" className="text-white border-[#3533CD]/30 hover:bg-[#3533CD]/10 ml-4 bg-transparent">
-          <Shuffle className="h-4 w-4 mr-2" />
-          SHUFFLE
-        </Button>
-      </div>
       {/* Custom scrollbar style */}
       <style jsx global>{`
         .custom-scrollbar {
