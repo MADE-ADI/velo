@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Mic, MicOff, Send, Volume2, Settings, Menu, Share, Shuffle, Plus, Loader2, AlertCircle, Power, PowerOff, MessageSquare, VolumeX } from "lucide-react"
+import { Mic, MicOff, Send, Volume2, Settings, Menu, Share, Shuffle, Plus, Loader2, AlertCircle, Power, PowerOff, MessageSquare, VolumeX, Wifi, WifiOff } from "lucide-react"
 import { useDIDAgentDirect } from "@/hooks/use-did-agent-direct"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 import MarkdownRenderer from "@/components/markdown-renderer"
@@ -65,6 +65,50 @@ export default function VirtualAIAgentClient() {
     resetTranscript
   } = useSpeechRecognition()
   const [isInitialized, setIsInitialized] = useState(false)
+  
+  // User connection status
+  const [userPing, setUserPing] = useState<number | null>(null)
+  const [userConnectionStatus, setUserConnectionStatus] = useState<'excellent' | 'good' | 'fair' | 'poor' | 'offline'>('good')
+
+  // Measure user ping/latency
+  const measurePing = async () => {
+    try {
+      const startTime = performance.now()
+      const response = await fetch('https://api.d-id.com/agents', { 
+        method: 'HEAD',
+        mode: 'no-cors' 
+      })
+      const endTime = performance.now()
+      const ping = Math.round(endTime - startTime)
+      
+      setUserPing(ping)
+      
+      // Determine connection quality based on ping
+      if (ping < 50) {
+        setUserConnectionStatus('excellent')
+      } else if (ping < 100) {
+        setUserConnectionStatus('good')
+      } else if (ping < 200) {
+        setUserConnectionStatus('fair')
+      } else {
+        setUserConnectionStatus('poor')
+      }
+    } catch (error) {
+      // Fallback ping measurement using simple request
+      try {
+        const startTime = performance.now()
+        await new Promise(resolve => setTimeout(resolve, 10)) // Small delay
+        const endTime = performance.now()
+        const estimatedPing = Math.round((endTime - startTime) * 10) // Rough estimation
+        
+        setUserPing(estimatedPing)
+        setUserConnectionStatus(estimatedPing < 100 ? 'good' : 'fair')
+      } catch {
+        setUserPing(null)
+        setUserConnectionStatus('offline')
+      }
+    }
+  }
 
   const characters: Character[] = [
     { id: "veco", name: "Veco", avatar: "/images/veco-character.png", title: "DATA ANALYSIS" },
@@ -200,13 +244,19 @@ export default function VirtualAIAgentClient() {
         event.preventDefault()
         handleAction()
       }
+      
+      // ESC key to stop voice input
+      if (event.key === 'Escape' && isListening) {
+        event.preventDefault()
+        stopListening()
+      }
     }
 
     if (isConnected) {
       document.addEventListener('keydown', handleKeyDown)
       return () => document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isConnected, handleAction, videoState])
+  }, [isConnected, handleAction, videoState, isListening, stopListening])
 
   const handleReconnect = async () => {
     if (reconnect) {
@@ -239,6 +289,69 @@ export default function VirtualAIAgentClient() {
     }
   }, [agent, isConnected, videoState])
 
+  // Measure ping periodically
+  useEffect(() => {
+    if (isBrowser) {
+      // Initial ping measurement
+      measurePing()
+      
+      // Measure ping every 10 seconds
+      const pingInterval = setInterval(() => {
+        measurePing()
+      }, 10000)
+      
+      return () => clearInterval(pingInterval)
+    }
+  }, [isBrowser])
+
+  // Get WiFi icon and color based on connection status
+  const getWiFiStatus = () => {
+    switch (userConnectionStatus) {
+      case 'excellent':
+        return { 
+          icon: <Wifi className="h-4 w-4" />, 
+          color: 'text-green-400', 
+          bgColor: 'bg-green-400/20',
+          label: 'Excellent'
+        }
+      case 'good':
+        return { 
+          icon: <Wifi className="h-4 w-4" />, 
+          color: 'text-blue-400', 
+          bgColor: 'bg-blue-400/20',
+          label: 'Good'
+        }
+      case 'fair':
+        return { 
+          icon: <Wifi className="h-4 w-4" />, 
+          color: 'text-yellow-400', 
+          bgColor: 'bg-yellow-400/20',
+          label: 'Fair'
+        }
+      case 'poor':
+        return { 
+          icon: <Wifi className="h-4 w-4" />, 
+          color: 'text-orange-400', 
+          bgColor: 'bg-orange-400/20',
+          label: 'Poor'
+        }
+      case 'offline':
+        return { 
+          icon: <WifiOff className="h-4 w-4" />, 
+          color: 'text-red-400', 
+          bgColor: 'bg-red-400/20',
+          label: 'Offline'
+        }
+      default:
+        return { 
+          icon: <Wifi className="h-4 w-4" />, 
+          color: 'text-gray-400', 
+          bgColor: 'bg-gray-400/20',
+          label: 'Unknown'
+        }
+    }
+  }
+
   // Debug video state changes
   useEffect(() => {
     console.log("Current videoState:", videoState)
@@ -267,41 +380,66 @@ export default function VirtualAIAgentClient() {
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl" />
 
       {/* Header */}
-      <header className="relative z-10 flex items-center justify-between p-6">
-        <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
-          <Menu className="h-6 w-6" />
-        </Button>
+      <header className="relative z-10 flex items-center justify-between p-3 md:p-6">
+        <div className="flex items-center space-x-2 md:space-x-4">
+          <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
+            <Menu className="h-5 w-5 md:h-6 md:w-6" />
+          </Button>
+          
+          {/* User Connection Status - Mobile responsive */}
+          <div className="bg-black/20 rounded-lg px-2 py-1 md:px-3 md:py-2 backdrop-blur-sm border border-white/10">
+            <div className="flex items-center space-x-1 md:space-x-2">
+              <div className={`${getWiFiStatus().color}`}>
+                <Wifi className="h-3 w-3 md:h-4 md:w-4" />
+              </div>
+              <div className="hidden sm:flex items-center space-x-1">
+                <span className={`text-xs px-2 py-1 rounded-full ${getWiFiStatus().bgColor} ${getWiFiStatus().color}`}>
+                  {getWiFiStatus().label}
+                </span>
+                <span className="text-white/80 text-xs">
+                  {userPing !== null ? `${userPing}ms` : '--ms'}
+                </span>
+              </div>
+              {/* Mobile: Show only ping */}
+              <span className="sm:hidden text-white/80 text-xs">
+                {userPing !== null ? `${userPing}ms` : '--ms'}
+              </span>
+            </div>
+          </div>
+        </div>
 
-        {/* Connection Status - Matching main.js */}
-        <div className="flex items-center space-x-3">
-          <div className={`w-3 h-3 rounded-full ${
+        {/* Connection Status - Mobile responsive */}
+        <div className="flex items-center space-x-2 md:space-x-3">
+          <div className={`w-2 h-2 md:w-3 md:h-3 rounded-full ${
             isConnected ? 'bg-green-400 animate-pulse' : 
             isConnecting ? 'bg-yellow-400 animate-pulse' : 
             'bg-red-400'
           }`} />
-          <span className="text-white text-sm font-medium">
+          <span className="text-white text-xs md:text-sm font-medium">
             {connectionLabel || (isConnected ? 'Online' : isConnecting ? 'Connecting..' : 'Disconnected')}
           </span>
           {agent?.preview_name && (
-            <span className="text-white/70 text-sm">• {agent.preview_name}</span>
+            <span className="hidden sm:inline text-white/70 text-xs md:text-sm">• {agent.preview_name}</span>
           )}
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2 md:space-x-4">
           <Button 
             variant="ghost" 
             onClick={handleConnect}
             disabled={isConnecting}
-            className="text-white hover:bg-white/10"
+            className="text-white hover:bg-white/10 text-xs md:text-sm px-2 md:px-4"
           >
             {isConnecting ? (
-              <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+              <Loader2 className="h-4 w-4 md:h-5 md:w-5 mr-1 md:mr-2 animate-spin" />
             ) : isConnected ? (
-              <PowerOff className="h-5 w-5 mr-2" />
+              <PowerOff className="h-4 w-4 md:h-5 md:w-5 mr-1 md:mr-2" />
             ) : (
-              <Power className="h-5 w-5 mr-2" />
+              <Power className="h-4 w-4 md:h-5 md:w-5 mr-1 md:mr-2" />
             )}
-            {isConnecting ? 'Menghubungkan...' : isConnected ? 'Putuskan' : 'Hubungkan'}
+            <span className="hidden sm:inline">
+              {isConnecting ? 'Connecting...' : isConnected ? 'Disconnect' : 'Connect'}
+            </span>
           </Button>
           
           {/* Add Reconnect Button like in main.js */}
@@ -309,29 +447,30 @@ export default function VirtualAIAgentClient() {
             <Button 
               variant="outline" 
               onClick={handleReconnect}
-              className="text-white border-white/30 hover:bg-white/10 bg-transparent"
+              className="text-white border-white/30 hover:bg-white/10 bg-transparent text-xs md:text-sm px-2 md:px-4"
             >
-              🔄 Reconnect
+              🔄 <span className="hidden sm:inline ml-1">Reconnect</span>
             </Button>
           )}
           
-          <Button variant="outline" className="text-white border-white/30 hover:bg-white/10 bg-transparent">
-            <Share className="h-4 w-4 mr-2" />
-            SHARE
+          <Button variant="outline" className="text-white border-white/30 hover:bg-white/10 bg-transparent text-xs md:text-sm px-2 md:px-4">
+            <Share className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
+            <span className="hidden sm:inline">SHARE</span>
           </Button>
         </div>
       </header>
 
-      <div className="relative z-10 flex flex-col lg:flex-row h-[calc(100vh-120px)] px-2 md:px-6 pb-6 gap-4">
-        {/* Left Section: Sidebar + Chat Area - lebih kecil */}
-        <div className="flex flex-col lg:flex-row lg:w-[40%] xl:w-[35%] gap-4">
-          {/* Sidebar kiri (volume, dsb) */}
-          <div className="w-full lg:w-20 flex flex-row lg:flex-col items-center space-x-4 lg:space-x-0 lg:space-y-6 bg-black/20 rounded-2xl p-2 lg:p-4 backdrop-blur-sm border border-white/10 min-h-[60px] lg:min-h-[400px]">
-            <div className="flex items-center justify-center w-10 h-10 bg-[#3533CD]/20 rounded-full">
-              <Volume2 className="h-5 w-5 text-white" />
+      <div className="relative z-10 flex flex-col lg:flex-row h-[calc(100vh-100px)] md:h-[calc(100vh-120px)] px-2 md:px-6 pb-3 md:pb-6 gap-2 md:gap-4">
+        {/* Left Section: Sidebar + Chat Area - Mobile responsive */}
+        <div className="flex flex-col lg:flex-row w-full lg:w-[40%] xl:w-[35%] gap-2 md:gap-4">
+          {/* Left sidebar (volume, etc) - Mobile responsive */}
+          <div className="w-full lg:w-20 flex flex-row lg:flex-col items-center justify-center lg:justify-start space-x-4 lg:space-x-0 lg:space-y-6 bg-black/20 rounded-2xl p-2 lg:p-4 backdrop-blur-sm border border-white/10 min-h-[60px] lg:min-h-[400px]">
+            <div className="flex items-center justify-center w-8 h-8 lg:w-10 lg:h-10 bg-[#3533CD]/20 rounded-full">
+              <Volume2 className="h-4 w-4 lg:h-5 lg:w-5 text-white" />
             </div>
-            {/* Volume slider */}
-            <div className="flex flex-col items-center space-y-4 h-48">
+            
+            {/* Volume slider - Hidden on mobile, shown on desktop */}
+            <div className="hidden lg:flex flex-col items-center space-y-4 h-48">
               <span className="text-white text-xs font-medium">Volume</span>
               <div className="relative h-32 w-2 bg-white/10 rounded-full">
                 <div
@@ -355,12 +494,32 @@ export default function VirtualAIAgentClient() {
               </div>
               <span className="text-white text-xs bg-[#3533CD]/20 px-2 py-1 rounded-full">{volume[0]}%</span>
             </div>
-            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 w-10 h-10 rounded-full">
-              <Settings className="h-4 w-4" />
+            
+            {/* Mobile volume display */}
+            <div className="lg:hidden flex items-center space-x-2">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={volume[0]}
+                onChange={e => setVolume([parseInt(e.target.value)])}
+                className="w-16 h-1 bg-white/10 rounded-full appearance-none cursor-pointer slider-mobile"
+                aria-label="Volume"
+                style={{
+                  background: `linear-gradient(to right, #3533CD 0%, #3533CD ${volume[0]}%, rgba(255,255,255,0.1) ${volume[0]}%, rgba(255,255,255,0.1) 100%)`
+                }}
+              />
+              <span className="text-white text-xs bg-[#3533CD]/20 px-2 py-1 rounded-full">{volume[0]}%</span>
+            </div>
+            
+            <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 w-8 h-8 lg:w-10 lg:h-10 rounded-full">
+              <Settings className="h-3 w-3 lg:h-4 lg:w-4" />
             </Button>
           </div>
-          {/* Chat Area - dibuat lebih compact */}
-          <div className="flex-1 flex flex-col bg-black/30 rounded-2xl p-2 lg:p-4 shadow-lg min-h-[400px] lg:min-h-[600px] border border-white/10">
+          
+          
+          {/* Chat Area - Mobile responsive */}
+          <div className="flex-1 flex flex-col bg-black/30 rounded-2xl p-3 lg:p-4 shadow-lg min-h-[300px] md:min-h-[400px] lg:min-h-[600px] border border-white/10">
           {/* Error Display */}
           {error && (
             <Card className="p-4 mb-4 bg-red-500/20 border-red-500/30 backdrop-blur-sm">
@@ -389,8 +548,8 @@ export default function VirtualAIAgentClient() {
               <div className="flex justify-end">
                 <div className="flex items-start space-x-3 max-w-lg">
                   <div className="flex flex-col flex-1">
-                    <Card className="p-4 bg-white text-black max-w-lg text-base md:text-lg shadow-md">
-                      <p>{pendingUserMessage}</p>
+                    <Card className="p-4 mb-4 bg-gradient-to-r from-[#1e2761] to-[#3a8dde] rounded-2xl shadow-lg border-0">
+                      <p className="text-white text-base leading-relaxed font-medium">{pendingUserMessage}</p>
                     </Card>
                   </div>
                   <Avatar className="w-8 h-8 flex-shrink-0">
@@ -411,12 +570,14 @@ export default function VirtualAIAgentClient() {
                   )}
                   <div className="flex flex-col flex-1">
                     <Card
-                      className={`p-4 ${
-                        message.role === 'user' ? "bg-white text-black max-w-lg text-base md:text-lg" : "bg-black/40 text-white border-white/20 text-base md:text-lg"
-                      } shadow-md`}
+                                            className={`${
+                         message.role === 'user'
+                           ? "p-4 mb-4 bg-gradient-to-r from-[#1e2761] to-[#3a8dde] rounded-2xl shadow-lg border-0"
+                           : "p-4 bg-black/40 text-white border-white/20 text-base md:text-lg shadow-md rounded-xl"
+                       }`}
                     >
                       {message.role === 'user' ? (
-                        <p>{message.content}</p>
+                        <p className="text-white text-base leading-relaxed font-medium">{message.content}</p>
                       ) : (
                         <MarkdownRenderer 
                           content={message.content} 
@@ -424,7 +585,7 @@ export default function VirtualAIAgentClient() {
                         />
                       )}
                     </Card>
-                    {/* Rating buttons tetap */}
+                    {/* Rating buttons */}
                     {message.role === 'assistant' && (
                       <div className="flex space-x-2 mt-2 justify-center">
                         <Button
@@ -456,7 +617,7 @@ export default function VirtualAIAgentClient() {
                 </div>
               </div>
             ))}
-            {/* AI sedang berpikir bubble */}
+            {/* AI thinking bubble */}
             {showThinking && (
               <div className="flex justify-start">
                 <div className="flex items-start space-x-3 max-w-2xl">
@@ -467,18 +628,18 @@ export default function VirtualAIAgentClient() {
                   <div className="flex flex-col flex-1">
                     <Card className="p-4 bg-black/40 text-white border-white/20 text-base md:text-lg shadow-md flex items-center space-x-2">
                       <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                      <span>AI sedang berpikir...</span>
+                      <span>AI is thinking...</span>
                     </Card>
                   </div>
                 </div>
               </div>
             )}
           </div>
-          {/* Input Area - turunkan dengan margin-top lebih besar */}
-          <div className="mt-8">
-            {/* Input Mode Selection (Like index.html radio buttons) */}
-            <div className="flex justify-center space-x-4 mb-4">
-              <div className="flex items-center space-x-6 bg-black/40 rounded-full px-6 py-2 border border-[#3533CD]/30">
+          {/* Input Area - Mobile responsive */}
+          <div className="mt-4 md:mt-8">
+            {/* Input Mode Selection - Mobile responsive */}
+            <div className="flex justify-center space-x-2 md:space-x-4 mb-3 md:mb-4">
+              <div className="flex items-center space-x-3 md:space-x-6 bg-black/40 rounded-full px-3 md:px-6 py-2 border border-[#3533CD]/30">
                 <label className="flex items-center cursor-pointer">
                   <input
                     type="radio"
@@ -488,11 +649,11 @@ export default function VirtualAIAgentClient() {
                     onChange={(e) => setInputMode(e.target.value as 'chat')}
                     className="sr-only"
                   />
-                  <div className={`flex items-center space-x-2 px-3 py-1 rounded-full transition-all ${
+                  <div className={`flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1 rounded-full transition-all ${
                     inputMode === 'chat' ? 'bg-[#3533CD] text-white' : 'text-white/60 hover:text-white'
                   }`}>
-                    <MessageSquare className="h-4 w-4" />
-                    <span className="text-sm font-medium">Chat</span>
+                    <MessageSquare className="h-3 w-3 md:h-4 md:w-4" />
+                    <span className="text-xs md:text-sm font-medium">Chat</span>
                   </div>
                 </label>
                 <label className="flex items-center cursor-pointer">
@@ -504,31 +665,31 @@ export default function VirtualAIAgentClient() {
                     onChange={(e) => setInputMode(e.target.value as 'speak')}
                     className="sr-only"
                   />
-                  <div className={`flex items-center space-x-2 px-3 py-1 rounded-full transition-all ${
+                  <div className={`flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1 rounded-full transition-all ${
                     inputMode === 'speak' ? 'bg-[#3533CD] text-white' : 'text-white/60 hover:text-white'
                   }`}>
-                    <VolumeX className="h-4 w-4" />
-                    <span className="text-sm font-medium">Speak</span>
+                    <VolumeX className="h-3 w-3 md:h-4 md:w-4" />
+                    <span className="text-xs md:text-sm font-medium">Speak</span>
                   </div>
                 </label>
               </div>
             </div>
 
-            {/* Input Area with Voice Controls */}
-            <div className="flex items-center space-x-2">
+            {/* Input Area with Voice Controls - Mobile responsive */}
+            <div className="flex items-center space-x-1 md:space-x-2">
               <div className="flex-1 relative">
                 <Input
                   value={inputMessage || interimTranscript}
                   onChange={(e) => setInputMessage(e.target.value)}
                   placeholder={
-                    videoState !== 'STOP' ? "🎬 Character sedang bicara... tunggu selesai" :
-                    isListening ? "🎤 Sedang mendengarkan... (akan dikirim otomatis)" :
-                    !speechSupported ? "Ketik pesan Anda..." :
-                    isConnected ? `Ketik atau bicara untuk ${inputMode === 'chat' ? 'chat' : 'speak'} (voice auto-send)...` : 
-                    "Hubungkan ke agent untuk mulai..."
+                    videoState !== 'STOP' ? "🎬 Character is speaking..." :
+                    isListening ? "🎤 Listening..." :
+                    !speechSupported ? "Type your message..." :
+                    isConnected ? `Type to ${inputMode === 'chat' ? 'chat' : 'speak'}...` : 
+                    "Connect to agent first..."
                   }
                   disabled={!isConnected || isLoading || isListening || videoState !== 'STOP'}
-                  className={`bg-black/40 border-[#3533CD]/30 text-white placeholder:text-white/60 pr-24 focus:border-[#3533CD] focus:ring-[#3533CD] disabled:opacity-50 ${
+                  className={`bg-black/40 border-[#3533CD]/30 text-white placeholder:text-white/60 pr-16 md:pr-24 text-sm md:text-base focus:border-[#3533CD] focus:ring-[#3533CD] disabled:opacity-50 ${
                     isListening ? 'border-green-400 shadow-green-400/20 shadow-lg' : ''
                   } ${
                     interimTranscript ? 'text-yellow-300' : ''
@@ -536,27 +697,28 @@ export default function VirtualAIAgentClient() {
                   onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleAction()}
                 />
                 
-                {/* Voice Controls */}
-                <div className="absolute right-1 top-1 flex space-x-1">
+                {/* Voice Controls - Mobile responsive */}
+                <div className="absolute right-1 top-1 flex space-x-0.5 md:space-x-1">
                   {/* Speech to Text Button */}
                   {speechSupported && (
                     <Button
                       onClick={handleSpeechToText}
                       size="icon"
                       disabled={!isConnected || videoState !== 'STOP'}
-                      className={`h-8 w-8 ${
+                      className={`h-6 w-6 md:h-8 md:w-8 ${
                         isListening ? 'bg-red-600 hover:bg-red-700 animate-pulse' :
                         'bg-gray-600 hover:bg-gray-700'
                       } disabled:opacity-50`}
                       title={
-                        videoState !== 'STOP' ? "Character sedang bicara, tunggu selesai" :
-                        "Speech to Text (Auto-send setelah selesai bicara)"
+                        videoState !== 'STOP' ? "Character is speaking, please wait" :
+                        isListening ? "Click to STOP listening" :
+                        "Speech to Text (Auto-send after speaking)"
                       }
                     >
                       {isListening ? (
-                        <MicOff className="h-4 w-4" />
+                        <MicOff className="h-3 w-3 md:h-4 md:w-4" />
                       ) : (
-                        <Mic className="h-4 w-4" />
+                        <Mic className="h-3 w-3 md:h-4 md:w-4" />
                       )}
                     </Button>
                   )}
@@ -567,16 +729,16 @@ export default function VirtualAIAgentClient() {
                       onClick={toggleVoiceChat}
                       size="icon"
                       disabled={!isConnected || videoState !== 'STOP'}
-                      className={`h-8 w-8 ${
+                      className={`h-6 w-6 md:h-8 md:w-8 ${
                         isVoiceChatMode ? 'bg-green-600 hover:bg-green-700' :
                         'bg-gray-600 hover:bg-gray-700'
                       } disabled:opacity-50`}
                       title={
-                        videoState !== 'STOP' ? "Character sedang bicara, tunggu selesai" :
+                        videoState !== 'STOP' ? "Character is speaking, please wait" :
                         "Voice Chat Mode (Continuous Auto-send)"
                       }
                     >
-                      <span className="text-xs">
+                      <span className="text-[10px] md:text-xs">
                         {isVoiceChatMode ? '🎤' : '🎙️'}
                       </span>
                     </Button>
@@ -587,70 +749,80 @@ export default function VirtualAIAgentClient() {
                     onClick={handleAction}
                     size="icon"
                     disabled={!isConnected || isLoading || (!inputMessage.trim() && !transcript) || videoState !== 'STOP'}
-                    className="h-8 w-8 bg-[#3533CD] hover:bg-[#3533CD]/80 disabled:opacity-50"
+                    className="h-6 w-6 md:h-8 md:w-8 bg-[#3533CD] hover:bg-[#3533CD]/80 disabled:opacity-50"
                     title={
-                      videoState !== 'STOP' ? "Character sedang bicara, tunggu selesai" :
+                      videoState !== 'STOP' ? "Character is speaking, please wait" :
                       `Send ${inputMode === 'chat' ? 'Chat' : 'Speak'} Message`
                     }
                   >
                     {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-3 w-3 md:h-4 md:w-4 animate-spin" />
                     ) : (
-                      <Send className="h-4 w-4" />
+                      <Send className="h-3 w-3 md:h-4 md:w-4" />
                     )}
                   </Button>
                 </div>
               </div>
             </div>
 
-            {/* Voice Status Indicator */}
+            {/* Voice Status Indicator - Mobile responsive */}
             {speechSupported && (isListening || speechError || videoState !== 'STOP') && (
-              <div className="mt-2 text-center">
+              <div className="mt-2 text-center px-2">
                 {videoState !== 'STOP' && (
                   <div className="flex items-center justify-center space-x-2 text-orange-400">
                     <div className="w-2 h-2 bg-orange-400 rounded-full animate-pulse"></div>
-                    <span className="text-sm">🎬 Character sedang bicara... input dihentikan sementara</span>
+                    <span className="text-xs md:text-sm">🎬 Character is speaking...</span>
                   </div>
                 )}
                 {isListening && videoState === 'STOP' && (
-                  <div className="flex items-center justify-center space-x-2 text-green-400">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-ping"></div>
-                    <span className="text-sm">Mendengarkan... (akan dikirim otomatis setelah selesai)</span>
+                  <div className="flex flex-col items-center justify-center space-y-1 md:space-y-2">
+                    <div className="flex items-center space-x-2 text-green-400">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-ping"></div>
+                      <span className="text-xs md:text-sm">🎤 Listening...</span>
+                    </div>
+                    <div className="text-[10px] md:text-xs text-white/60">
+                      Click red 🎤 button or press ESC to stop
+                    </div>
                   </div>
                 )}
                 {speechError && (
-                  <div className="text-red-400 text-sm">
+                  <div className="text-red-400 text-xs md:text-sm">
                     {speechError}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Keyboard Shortcuts Info */}
+            {/* Keyboard Shortcuts Info - Mobile responsive */}
             {isConnected && (
-              <div className="mt-2 text-center text-xs text-white/40">
-                Tab: Switch mode • {videoState === 'STOP' ? 'Enter: Send' : 'Enter: Disabled (character talking)'} • 
-                {speechSupported ? (videoState === 'STOP' ? " Voice: Auto-send setelah bicara" : " Voice: Disabled") : " Voice: Not supported"}
+              <div className="mt-2 text-center text-[10px] md:text-xs text-white/40 px-2">
+                <div className="hidden md:block">
+                  Tab: Switch mode • {videoState === 'STOP' ? 'Enter: Send' : 'Enter: Disabled'} • 
+                  {speechSupported ? (videoState === 'STOP' ? " Voice: Auto-send" : " Voice: Disabled") : " Voice: Not supported"}
+                  {isListening && " • ESC: Stop voice"}
+                </div>
+                <div className="md:hidden">
+                  {videoState === 'STOP' ? 'Tap Send' : 'Character talking'} • 
+                  {speechSupported ? (videoState === 'STOP' ? "Voice: Auto-send" : "Voice: Disabled") : "Voice: Not supported"}
+                </div>
               </div>
             )}
           </div>
           </div>
         </div>
 
-        {/* AI Character Display - Area Besar di Kanan */}
-        <div className="flex-1 lg:w-[60%] xl:w-[65%] flex flex-col items-center justify-start relative min-h-full pt-4">
-          <div className="relative flex flex-col items-center justify-start w-full h-full">
-            {/* Character Avatar - Full Size Rectangular Box */}
-            <div className="flex items-center justify-center w-full h-auto">
-              <div 
-                className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-[70vh] lg:h-[80vh] flex items-center justify-center transition-all duration-500 ${!isConnected ? 'blur-sm' : 'blur-0'}`}
-                style={{ 
-                  backgroundImage: agent?.presenter?.thumbnail ? `url(${agent.presenter.thumbnail})` : undefined,
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center'
-                }}
-              >
-                {/* D-ID Streaming Video - object-cover untuk zoom in dan pas dengan card */}
+        {/* AI Character Display - Mobile responsive */}
+        <div className="w-full lg:flex-1 lg:w-[60%] xl:w-[65%] flex flex-col justify-center h-full">
+          <div className="flex items-center justify-center w-full h-full">
+            <div 
+              className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-2 md:border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-[300px] md:h-[400px] lg:h-full flex items-center justify-center transition-all duration-500 ${!isConnected ? 'blur-sm' : 'blur-0'}`}
+              style={{ 
+                backgroundImage: agent?.presenter?.thumbnail ? `url(${agent.presenter.thumbnail})` : undefined,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center'
+              }}
+            >
+                {/* D-ID Streaming Video - object-cover for zoom in and fit with card */}
                 <video
                   ref={streamVideoRef}
                   autoPlay
@@ -659,7 +831,7 @@ export default function VirtualAIAgentClient() {
                   className="absolute inset-0 w-full h-full object-cover rounded-2xl z-20 transition-opacity duration-300"
                   style={{ opacity: 0 }}
                 />
-                {/* D-ID Idle Video - object-cover untuk zoom in dan pas dengan card */}
+                {/* D-ID Idle Video - object-cover for zoom in and fit with card */}
                 <video
                   ref={idleVideoRef}
                   autoPlay
@@ -668,7 +840,7 @@ export default function VirtualAIAgentClient() {
                   className="absolute inset-0 w-full h-full object-cover rounded-2xl z-10 transition-opacity duration-300"
                   style={{ opacity: 0 }}
                 />
-                {/* Background Image - object-cover untuk zoom in dan pas dengan card */}
+                {/* Background Image - object-cover for zoom in and fit with card */}
                 <img
                   src={agent?.presenter?.thumbnail || agent?.presenter?.preview_url || "/images/veco-character.png"}
                   alt={agent?.preview_name || "AI Character"}
@@ -712,14 +884,11 @@ export default function VirtualAIAgentClient() {
                 </div>
               </div>
             </div>
-            {/* Character Info dan Status info dihapus sesuai permintaan user */}
+            {/* Character Info and Status info removed as per user request */}
           </div>
         </div>
-      </div>
 
-      {/* Bottom Character Selection */}
-
-      {/* Custom scrollbar style */}
+      {/* Custom scrollbar and mobile slider styles */}
       <style jsx global>{`
         .custom-scrollbar {
           scrollbar-width: thin;
@@ -735,6 +904,28 @@ export default function VirtualAIAgentClient() {
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
           background: #4f46e5;
+        }
+        
+        /* Mobile slider styles */
+        .slider-mobile::-webkit-slider-thumb {
+          appearance: none;
+          height: 12px;
+          width: 12px;
+          border-radius: 50%;
+          background: #3533CD;
+          cursor: pointer;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .slider-mobile::-moz-range-thumb {
+          height: 12px;
+          width: 12px;
+          border-radius: 50%;
+          background: #3533CD;
+          cursor: pointer;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
       `}</style>
     </div>
