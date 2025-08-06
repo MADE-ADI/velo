@@ -99,7 +99,7 @@ export const useDIDAgent = () => {
           setMessages(prev => [...prev, greetingMessage])
         }
       } else if (state === "disconnected" || state === "closed") {
-        setError('Koneksi terputus')
+        setError('Lost connection')
       }
     }, [agent]),
 

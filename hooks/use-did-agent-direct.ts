@@ -117,7 +117,7 @@ export const useDIDAgentDirect = () => {
       }
       else if (state === "disconnected" || state === "closed") {
         setConnectionLabel("")
-        setError('Koneksi terputus')
+        setError('Lost connection')
         setIsConnected(false)
       }
     },
