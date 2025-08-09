@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Mic, MicOff, Send, Volume2, Settings, Menu, Share, Shuffle, Plus, Loader2, AlertCircle, Power, PowerOff, MessageSquare, VolumeX, Wifi, WifiOff } from "lucide-react"
+import { SignOutButton } from '@/components/sign-out-button'
 import { useDIDAgentDirect } from "@/hooks/use-did-agent-direct"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 import MarkdownRenderer from "@/components/markdown-renderer"
@@ -457,6 +458,13 @@ export default function VirtualAIAgentClient() {
             <Share className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
             <span className="hidden sm:inline">SHARE</span>
           </Button>
+          {/* Logout placed to the right of Share */}
+          <SignOutButton 
+            variant="outline"
+            className="text-white border-white/30 hover:bg-white/10 bg-transparent text-xs md:text-sm px-2 md:px-4"
+          >
+            LOGOUT
+          </SignOutButton>
         </div>
       </header>
 
