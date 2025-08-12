@@ -1,10 +1,28 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
+// Speech Recognition types
+interface SpeechRecognitionEvent extends Event {
+  resultIndex: number
+  results: SpeechRecognitionResultList
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string
+  message: string
+}
+
 // Extended SpeechRecognition interface for better browser support
-interface ExtendedSpeechRecognition extends SpeechRecognition {
+interface ExtendedSpeechRecognition extends EventTarget {
   continuous: boolean
   interimResults: boolean
   lang: string
+  start(): void
+  stop(): void
+  abort(): void
+  onstart: ((this: ExtendedSpeechRecognition, ev: Event) => void) | null
+  onend: ((this: ExtendedSpeechRecognition, ev: Event) => void) | null
+  onresult: ((this: ExtendedSpeechRecognition, ev: SpeechRecognitionEvent) => void) | null
+  onerror: ((this: ExtendedSpeechRecognition, ev: SpeechRecognitionErrorEvent) => void) | null
 }
 
 interface ExtendedWindow extends Window {
@@ -14,6 +32,7 @@ interface ExtendedWindow extends Window {
 
 export const useSpeechRecognition = () => {
   const [isListening, setIsListening] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
   const [isSupported, setIsSupported] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interimTranscript, setInterimTranscript] = useState('')
@@ -44,6 +63,9 @@ export const useSpeechRecognition = () => {
       }
       
       recognition.onresult = (event: SpeechRecognitionEvent) => {
+        // Skip processing if paused
+        if (isPaused) return
+        
         let finalTranscript = ''
         let interimTranscript = ''
         
@@ -57,23 +79,24 @@ export const useSpeechRecognition = () => {
         }
         
         if (finalTranscript) {
-          setTranscript(finalTranscript.trim())
+          // Append to existing transcript instead of replacing
+          setTranscript(prev => (prev + ' ' + finalTranscript).trim())
           setInterimTranscript('')
           console.log('Final transcript:', finalTranscript.trim())
         } else {
           setInterimTranscript(interimTranscript)
         }
         
-        // Auto-stop after 2 seconds of silence for faster response
+        // Extended auto-stop timer for longer pauses (increased from 2s to 5s)
         if (timeoutRef.current) {
           clearTimeout(timeoutRef.current)
         }
         
         timeoutRef.current = setTimeout(() => {
-          if (recognition && isListening) {
+          if (recognition && isListening && !isPaused) {
             recognition.stop()
           }
-        }, 2000) // Reduced from 3000ms to 2000ms for faster auto-send
+        }, 5000) // Increased from 2000ms to 5000ms for longer pauses
       }
       
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -85,6 +108,7 @@ export const useSpeechRecognition = () => {
       recognition.onend = () => {
         console.log('Speech recognition ended')
         setIsListening(false)
+        setIsPaused(false)
         setInterimTranscript('')
         
         if (timeoutRef.current) {
@@ -103,7 +127,7 @@ export const useSpeechRecognition = () => {
         clearTimeout(timeoutRef.current)
       }
     }
-  }, [isListening])
+  }, [isListening, isPaused])
 
   const startListening = useCallback(() => {
     if (!recognitionRef.current || !isSupported) {
@@ -120,6 +144,7 @@ export const useSpeechRecognition = () => {
       setTranscript('')
       setInterimTranscript('')
       setError(null)
+      setIsPaused(false)
       recognitionRef.current.start()
     } catch (error) {
       console.error('Error starting speech recognition:', error)
@@ -133,18 +158,37 @@ export const useSpeechRecognition = () => {
     }
   }, [isListening])
 
+  const pauseListening = useCallback(() => {
+    if (isListening) {
+      setIsPaused(true)
+      console.log('Speech recognition paused')
+    }
+  }, [isListening])
+
+  const resumeListening = useCallback(() => {
+    if (isListening && isPaused) {
+      setIsPaused(false)
+      console.log('Speech recognition resumed')
+    }
+  }, [isListening, isPaused])
+
   const toggleListening = useCallback(() => {
     if (isListening) {
-      stopListening()
+      if (isPaused) {
+        resumeListening()
+      } else {
+        pauseListening()
+      }
     } else {
       startListening()
     }
-  }, [isListening, startListening, stopListening])
+  }, [isListening, isPaused, startListening, pauseListening, resumeListening])
 
   // Reset transcript
   const resetTranscript = useCallback(() => {
     setTranscript('')
     setInterimTranscript('')
+    setIsPaused(false)
   }, [])
 
   // Cleanup on unmount
@@ -162,6 +206,7 @@ export const useSpeechRecognition = () => {
   return {
     // State
     isListening,
+    isPaused,
     isSupported,
     transcript,
     interimTranscript,
@@ -170,6 +215,8 @@ export const useSpeechRecognition = () => {
     // Actions
     startListening,
     stopListening,
+    pauseListening,
+    resumeListening,
     toggleListening,
     resetTranscript
   }

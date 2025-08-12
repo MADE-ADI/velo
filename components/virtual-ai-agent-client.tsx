@@ -56,12 +56,15 @@ export default function VirtualAIAgentClient() {
   // Speech Recognition Integration
   const {
     isListening,
+    isPaused,
     isSupported: speechSupported,
     transcript,
     interimTranscript,
     error: speechError,
     startListening,
     stopListening,
+    pauseListening,
+    resumeListening,
     toggleListening,
     resetTranscript
   } = useSpeechRecognition()
@@ -140,6 +143,8 @@ export default function VirtualAIAgentClient() {
     setPendingUserMessage(message)
     setShowThinking(true)
     setInputMessage("")
+    // Reset transcript when sending message
+    resetTranscript()
     // Kirim ke agent
     if (inputMode === 'chat') {
       await chat(message)
@@ -150,24 +155,13 @@ export default function VirtualAIAgentClient() {
     setShowThinking(false)
   }
 
-  // Auto-handle voice input (langsung bubble user)
+  // Handle voice input - put transcript in input field without auto-send
   useEffect(() => {
     if (transcript && isConnected && videoState === 'STOP') {
-      setPendingUserMessage(transcript)
-      setShowThinking(true)
-      setInputMessage("")
-      setTimeout(() => {
-        if (inputMode === 'chat') {
-          chat(transcript)
-        } else {
-          speak(transcript)
-        }
-        setPendingUserMessage(null)
-        setShowThinking(false)
-        resetTranscript()
-      }, 500)
+      setInputMessage(transcript)
+      // Don't reset transcript here to allow accumulation
     }
-  }, [transcript, isConnected, inputMode, chat, speak, resetTranscript, videoState])
+  }, [transcript, isConnected, videoState])
 
   const toggleRecording = () => {
     if (!speechSupported) {
@@ -203,8 +197,17 @@ export default function VirtualAIAgentClient() {
     }
     
     if (isListening) {
-      stopListening()
+      if (isPaused) {
+        // Resume if paused
+        resumeListening()
+      } else {
+        // Pause if currently listening
+        pauseListening()
+      }
     } else {
+      // Clear input and reset transcript when starting new recording
+      setInputMessage("")
+      resetTranscript()
       startListening()
     }
   }
@@ -527,7 +530,7 @@ export default function VirtualAIAgentClient() {
           
           
           {/* Chat Area - Mobile responsive */}
-          <div className="flex-1 flex flex-col bg-black/30 rounded-2xl p-3 lg:p-4 shadow-lg min-h-[300px] md:min-h-[400px] lg:min-h-[600px] border border-white/10">
+          <div className="flex-1 flex flex-col bg-black/30 rounded-2xl p-3 lg:p-4 shadow-lg min-h-[250px] md:min-h-[350px] lg:min-h-[500px] border border-white/10">
           {/* Error Display */}
           {error && (
             <Card className="p-4 mb-4 bg-red-500/20 border-red-500/30 backdrop-blur-sm">
@@ -560,8 +563,8 @@ export default function VirtualAIAgentClient() {
                       <p className="text-white text-base leading-relaxed font-medium">{pendingUserMessage}</p>
                     </Card>
                   </div>
-                  <Avatar className="w-8 h-8 flex-shrink-0">
-                    <AvatarFallback className="bg-purple-500 text-white">U</AvatarFallback>
+                  <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
+                    <AvatarFallback className="bg-purple-500 text-white pointer-events-none select-none">U</AvatarFallback>
                   </Avatar>
                 </div>
               </div>
@@ -571,9 +574,13 @@ export default function VirtualAIAgentClient() {
               <div key={message.id + idx} className={`flex ${message.role === 'user' ? "justify-end" : "justify-start"}`}>
                 <div className={`flex items-start space-x-3 ${message.role === 'user' ? 'max-w-lg' : 'max-w-2xl'}`}>
                   {message.role !== 'user' && (
-                    <Avatar className="w-8 h-8 flex-shrink-0">
-                      <AvatarImage src={agent?.presenter?.preview_url || "/images/veco-character.png"} />
-                      <AvatarFallback>AI</AvatarFallback>
+                    <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
+                      <AvatarImage 
+                        src={agent?.presenter?.preview_url || "/images/veco-character.png"} 
+                        className="pointer-events-none select-none"
+                        draggable={false}
+                      />
+                      <AvatarFallback className="pointer-events-none select-none">AI</AvatarFallback>
                     </Avatar>
                   )}
                   <div className="flex flex-col flex-1">
@@ -618,8 +625,8 @@ export default function VirtualAIAgentClient() {
                     )}
                   </div>
                   {message.role === 'user' && (
-                    <Avatar className="w-8 h-8 flex-shrink-0">
-                      <AvatarFallback className="bg-purple-500 text-white">U</AvatarFallback>
+                    <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
+                      <AvatarFallback className="bg-purple-500 text-white pointer-events-none select-none">U</AvatarFallback>
                     </Avatar>
                   )}
                 </div>
@@ -629,9 +636,13 @@ export default function VirtualAIAgentClient() {
             {showThinking && (
               <div className="flex justify-start">
                 <div className="flex items-start space-x-3 max-w-2xl">
-                  <Avatar className="w-8 h-8 flex-shrink-0">
-                    <AvatarImage src={agent?.presenter?.preview_url || "/images/veco-character.png"} />
-                    <AvatarFallback>AI</AvatarFallback>
+                  <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
+                    <AvatarImage 
+                      src={agent?.presenter?.preview_url || "/images/veco-character.png"} 
+                      className="pointer-events-none select-none"
+                      draggable={false}
+                    />
+                    <AvatarFallback className="pointer-events-none select-none">AI</AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col flex-1">
                     <Card className="p-4 bg-black/40 text-white border-white/20 text-base md:text-lg shadow-md flex items-center space-x-2">
@@ -645,112 +656,77 @@ export default function VirtualAIAgentClient() {
           </div>
           {/* Input Area - Mobile responsive */}
           <div className="mt-4 md:mt-8">
-            {/* Input Mode Selection - Mobile responsive */}
-            <div className="flex justify-center space-x-2 md:space-x-4 mb-3 md:mb-4">
-              <div className="flex items-center space-x-3 md:space-x-6 bg-black/40 rounded-full px-3 md:px-6 py-2 border border-[#3533CD]/30">
-                <label className="flex items-center cursor-pointer">
-                  <input
-                    type="radio"
-                    name="inputMode"
-                    value="chat"
-                    checked={inputMode === 'chat'}
-                    onChange={(e) => setInputMode(e.target.value as 'chat')}
-                    className="sr-only"
-                  />
-                  <div className={`flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1 rounded-full transition-all ${
-                    inputMode === 'chat' ? 'bg-[#3533CD] text-white' : 'text-white/60 hover:text-white'
-                  }`}>
-                    <MessageSquare className="h-3 w-3 md:h-4 md:w-4" />
-                    <span className="text-xs md:text-sm font-medium">Chat</span>
-                  </div>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input
-                    type="radio"
-                    name="inputMode"
-                    value="speak"
-                    checked={inputMode === 'speak'}
-                    onChange={(e) => setInputMode(e.target.value as 'speak')}
-                    className="sr-only"
-                  />
-                  <div className={`flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1 rounded-full transition-all ${
-                    inputMode === 'speak' ? 'bg-[#3533CD] text-white' : 'text-white/60 hover:text-white'
-                  }`}>
-                    <VolumeX className="h-3 w-3 md:h-4 md:w-4" />
-                    <span className="text-xs md:text-sm font-medium">Speak</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
             {/* Input Area with Voice Controls - Mobile responsive */}
             <div className="flex items-center space-x-1 md:space-x-2">
               <div className="flex-1 relative">
-                <Input
+                  <Input
                   value={inputMessage || interimTranscript}
                   onChange={(e) => setInputMessage(e.target.value)}
                   placeholder={
                     videoState !== 'STOP' ? "🎬 Character is speaking..." :
-                    isListening ? "🎤 Listening..." :
+                    isListening && !isPaused ? "🎤 Listening..." :
+                    isListening && isPaused ? "⏸️ Paused - Click mic to resume..." :
                     !speechSupported ? "Type your message..." :
                     isConnected ? `Type to ${inputMode === 'chat' ? 'chat' : 'speak'}...` : 
                     "Connect to agent first..."
                   }
-                  disabled={!isConnected || isLoading || isListening || videoState !== 'STOP'}
+                  disabled={!isConnected || isLoading || (isListening && !isPaused) || videoState !== 'STOP'}
                   className={`bg-black/40 border-[#3533CD]/30 text-white placeholder:text-white/60 pr-16 md:pr-24 text-sm md:text-base focus:border-[#3533CD] focus:ring-[#3533CD] disabled:opacity-50 ${
-                    isListening ? 'border-green-400 shadow-green-400/20 shadow-lg' : ''
+                    isListening && !isPaused ? 'border-green-400 shadow-green-400/20 shadow-lg' : 
+                    isPaused ? 'border-yellow-400 shadow-yellow-400/20 shadow-lg' : ''
                   } ${
                     interimTranscript ? 'text-yellow-300' : ''
                   }`}
                   onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleAction()}
-                />
-                
-                {/* Voice Controls - Mobile responsive */}
+                />                {/* Voice Controls - Mobile responsive */}
                 <div className="absolute right-1 top-1 flex space-x-0.5 md:space-x-1">
-                  {/* Speech to Text Button */}
+                                    {/* Speech to Text Button */}
                   {speechSupported && (
                     <Button
                       onClick={handleSpeechToText}
                       size="icon"
                       disabled={!isConnected || videoState !== 'STOP'}
                       className={`h-6 w-6 md:h-8 md:w-8 ${
-                        isListening ? 'bg-red-600 hover:bg-red-700 animate-pulse' :
+                        isListening && !isPaused ? 'bg-green-600 hover:bg-green-700 animate-pulse' :
+                        isPaused ? 'bg-yellow-600 hover:bg-yellow-700' :
                         'bg-gray-600 hover:bg-gray-700'
                       } disabled:opacity-50`}
                       title={
                         videoState !== 'STOP' ? "Character is speaking, please wait" :
-                        isListening ? "Click to STOP listening" :
-                        "Speech to Text (Auto-send after speaking)"
+                        isListening && !isPaused ? "Click to PAUSE listening" :
+                        isPaused ? "Click to RESUME listening" :
+                        "Speech to Text (Manual send after speaking)"
                       }
                     >
-                      {isListening ? (
-                        <MicOff className="h-3 w-3 md:h-4 md:w-4" />
+                      {isListening && !isPaused ? (
+                        <div className="relative">
+                          <Mic className="h-3 w-3 md:h-4 md:w-4" />
+                        </div>
+                      ) : isPaused ? (
+                        <div className="h-3 w-3 md:h-4 md:w-4 bg-white rounded-sm" />
                       ) : (
                         <Mic className="h-3 w-3 md:h-4 md:w-4" />
                       )}
                     </Button>
                   )}
                   
-                  {/* Voice Chat Toggle Button */}
-                  {speechSupported && (
-                    <Button
-                      onClick={toggleVoiceChat}
-                      size="icon"
-                      disabled={!isConnected || videoState !== 'STOP'}
-                      className={`h-6 w-6 md:h-8 md:w-8 ${
-                        isVoiceChatMode ? 'bg-green-600 hover:bg-green-700' :
-                        'bg-gray-600 hover:bg-gray-700'
-                      } disabled:opacity-50`}
-                      title={
-                        videoState !== 'STOP' ? "Character is speaking, please wait" :
-                        "Voice Chat Mode (Continuous Auto-send)"
-                      }
-                    >
-                      <span className="text-[10px] md:text-xs">
-                        {isVoiceChatMode ? '🎤' : '🎙️'}
-                      </span>
-                    </Button>
-                  )}
+                  {/* Send Button */}
+                  <Button
+                    onClick={handleAction}
+                    size="icon"
+                    disabled={!isConnected || isLoading || (!inputMessage.trim() && !transcript) || videoState !== 'STOP'}
+                    className="h-6 w-6 md:h-8 md:w-8 bg-[#3533CD] hover:bg-[#3533CD]/80 disabled:opacity-50"
+                    title={
+                      videoState !== 'STOP' ? "Character is speaking, please wait" :
+                      `Send ${inputMode === 'chat' ? 'Chat' : 'Speak'} Message`
+                    }
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-3 w-3 md:h-4 md:w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-3 w-3 md:h-4 md:w-4" />
+                    )}
+                  </Button>
                   
                   {/* Send Button */}
                   <Button
@@ -774,7 +750,7 @@ export default function VirtualAIAgentClient() {
             </div>
 
             {/* Voice Status Indicator - Mobile responsive */}
-            {speechSupported && (isListening || speechError || videoState !== 'STOP') && (
+            {speechSupported && (isListening || isPaused || speechError || videoState !== 'STOP') && (
               <div className="mt-2 text-center px-2">
                 {videoState !== 'STOP' && (
                   <div className="flex items-center justify-center space-x-2 text-orange-400">
@@ -782,14 +758,25 @@ export default function VirtualAIAgentClient() {
                     <span className="text-xs md:text-sm">🎬 Character is speaking...</span>
                   </div>
                 )}
-                {isListening && videoState === 'STOP' && (
+                {isListening && !isPaused && videoState === 'STOP' && (
                   <div className="flex flex-col items-center justify-center space-y-1 md:space-y-2">
                     <div className="flex items-center space-x-2 text-green-400">
                       <div className="w-2 h-2 bg-green-400 rounded-full animate-ping"></div>
                       <span className="text-xs md:text-sm">🎤 Listening...</span>
                     </div>
                     <div className="text-[10px] md:text-xs text-white/60">
-                      Click red 🎤 button or press ESC to stop
+                      Click 🎤 button to pause or press ESC to stop
+                    </div>
+                  </div>
+                )}
+                {isPaused && videoState === 'STOP' && (
+                  <div className="flex flex-col items-center justify-center space-y-1 md:space-y-2">
+                    <div className="flex items-center space-x-2 text-yellow-400">
+                      <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                      <span className="text-xs md:text-sm">⏸️ Recording Paused</span>
+                    </div>
+                    <div className="text-[10px] md:text-xs text-white/60">
+                      Click 🎤 button to resume recording
                     </div>
                   </div>
                 )}
@@ -806,12 +793,12 @@ export default function VirtualAIAgentClient() {
               <div className="mt-2 text-center text-[10px] md:text-xs text-white/40 px-2">
                 <div className="hidden md:block">
                   Tab: Switch mode • {videoState === 'STOP' ? 'Enter: Send' : 'Enter: Disabled'} • 
-                  {speechSupported ? (videoState === 'STOP' ? " Voice: Auto-send" : " Voice: Disabled") : " Voice: Not supported"}
+                  {speechSupported ? (videoState === 'STOP' ? " Voice: Manual send" : " Voice: Disabled") : " Voice: Not supported"}
                   {isListening && " • ESC: Stop voice"}
                 </div>
                 <div className="md:hidden">
                   {videoState === 'STOP' ? 'Tap Send' : 'Character talking'} • 
-                  {speechSupported ? (videoState === 'STOP' ? "Voice: Auto-send" : "Voice: Disabled") : "Voice: Not supported"}
+                  {speechSupported ? (videoState === 'STOP' ? "Voice: Manual send" : "Voice: Disabled") : "Voice: Not supported"}
                 </div>
               </div>
             )}
@@ -827,7 +814,8 @@ export default function VirtualAIAgentClient() {
               style={{ 
                 backgroundImage: agent?.presenter?.thumbnail ? `url(${agent.presenter.thumbnail})` : undefined,
                 backgroundSize: 'cover',
-                backgroundPosition: 'center'
+                backgroundPosition: 'center',
+                pointerEvents: 'none' // Disable all click events including iOS popup
               }}
             >
                 {/* D-ID Streaming Video - object-cover for zoom in and fit with card */}
@@ -837,7 +825,7 @@ export default function VirtualAIAgentClient() {
                   playsInline
                   muted={false}
                   className="absolute inset-0 w-full h-full object-cover rounded-2xl z-20 transition-opacity duration-300"
-                  style={{ opacity: 0 }}
+                  style={{ opacity: 0, pointerEvents: 'none' }}
                 />
                 {/* D-ID Idle Video - object-cover for zoom in and fit with card */}
                 <video
@@ -846,13 +834,14 @@ export default function VirtualAIAgentClient() {
                   loop
                   muted={false}
                   className="absolute inset-0 w-full h-full object-cover rounded-2xl z-10 transition-opacity duration-300"
-                  style={{ opacity: 0 }}
+                  style={{ opacity: 0, pointerEvents: 'none' }}
                 />
                 {/* Background Image - object-cover for zoom in and fit with card */}
                 <img
                   src={agent?.presenter?.thumbnail || agent?.presenter?.preview_url || "/images/veco-character.png"}
                   alt={agent?.preview_name || "AI Character"}
                   className="absolute inset-0 w-full h-full object-cover rounded-2xl z-0"
+                  style={{ pointerEvents: 'none' }}
                   onError={e => { e.currentTarget.src = "/images/veco-character.png" }}
                 />
                 {/* Zoom-style overlay gradient */}
