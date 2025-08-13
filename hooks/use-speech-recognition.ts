@@ -63,40 +63,21 @@ export const useSpeechRecognition = () => {
       }
       
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        // Skip processing if paused
-        if (isPaused) return
-        
+        // Process all results like webSpeechAPI.js
         let finalTranscript = ''
-        let interimTranscript = ''
         
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i]
           if (result.isFinal) {
             finalTranscript += result[0].transcript
-          } else {
-            interimTranscript += result[0].transcript
           }
         }
         
         if (finalTranscript) {
-          // Append to existing transcript instead of replacing
+          // Append to existing transcript like webSpeechAPI.js
           setTranscript(prev => (prev + ' ' + finalTranscript).trim())
-          setInterimTranscript('')
           console.log('Final transcript:', finalTranscript.trim())
-        } else {
-          setInterimTranscript(interimTranscript)
         }
-        
-        // Extended auto-stop timer for longer pauses (increased from 2s to 5s)
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current)
-        }
-        
-        timeoutRef.current = setTimeout(() => {
-          if (recognition && isListening && !isPaused) {
-            recognition.stop()
-          }
-        }, 5000) // Increased from 2000ms to 5000ms for longer pauses
       }
       
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -111,8 +92,10 @@ export const useSpeechRecognition = () => {
         setIsPaused(false)
         setInterimTranscript('')
         
+        // Clear timeout like webSpeechAPI.js reset function
         if (timeoutRef.current) {
           clearTimeout(timeoutRef.current)
+          timeoutRef.current = null
         }
       }
       

@@ -1,12 +1,16 @@
 import GoogleProvider from "next-auth/providers/google"
 import type { NextAuthOptions } from "next-auth"
 
+const googleLoginEnabled = process.env.GOOGLE_LOGIN_ENABLED === 'true' || process.env.NEXT_PUBLIC_GOOGLE_LOGIN_ENABLED === 'true';
+
 export const authOptions: NextAuthOptions = {
   providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-    }),
+    ...(googleLoginEnabled ? [
+      GoogleProvider({
+        clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+      })
+    ] : [])
   ],
   session: {
     strategy: "jwt",

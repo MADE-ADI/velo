@@ -1,11 +1,13 @@
                                                   "use client"
 
 import React, { useRef, useEffect, useState } from "react"
+import Script from "next/script"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Mic, MicOff, Send, Volume2, Settings, Menu, Share, Shuffle, Plus, Loader2, AlertCircle, Power, PowerOff, MessageSquare, VolumeX, Wifi, WifiOff } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { SignOutButton } from '@/components/sign-out-button'
 import { useDIDAgentDirect } from "@/hooks/use-did-agent-direct"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
@@ -47,11 +49,20 @@ export default function VirtualAIAgentClient() {
   // Volume state
   const [volume, setVolume] = useState([75])
   const [selectedCharacter, setSelectedCharacter] = useState("veco")
-  const [inputMode, setInputMode] = useState<'chat' | 'speak'>('chat') // Like index.html radio buttons
   const [isVoiceChatMode, setIsVoiceChatMode] = useState(false) // Continuous voice chat
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null)
   const [showThinking, setShowThinking] = useState(false)
+  const [showChatHistory, setShowChatHistory] = useState(false) // For expandable chat history
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summaryText, setSummaryText] = useState<string>("")
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  // Debug: capture messages possibly emitted by the D-ID embed
+  const [embedMessages, setEmbedMessages] = useState<{ role: 'user' | 'assistant' | 'system'; content: string }[]>([])
+  const [lastEmbedEvent, setLastEmbedEvent] = useState<any>(null)
+  const [summarySource, setSummarySource] = useState<'hook' | 'embed' | 'none'>('none')
+  const isDev = process.env.NODE_ENV !== 'production'
+  const [showDebug, setShowDebug] = useState<boolean>(isDev)
 
   // Speech Recognition Integration
   const {
@@ -120,14 +131,64 @@ export default function VirtualAIAgentClient() {
     { id: "curie", name: "Marie Curie", avatar: "/placeholder.svg?height=40&width=40", title: "SCIENTIST" },
   ]
 
-  // Initialize connection on mount - only in browser
+  // Initialize connection on mount - only in browser + iOS video fix
   useEffect(() => {
     if (isBrowser && !isInitialized) {
       connect().then(() => {
         setIsInitialized(true)
       })
+      
+      // iOS video behavior fix
+      const videos = document.querySelectorAll('video')
+      videos.forEach(video => {
+        // Prevent fullscreen behavior on iOS
+        video.setAttribute('playsinline', 'true')
+        video.setAttribute('webkit-playsinline', 'true')
+        video.setAttribute('x5-playsinline', 'true')
+        video.setAttribute('x5-video-player-type', 'h5')
+        video.setAttribute('x5-video-player-fullscreen', 'false')
+        
+        // Disable context menu and touch events
+        video.style.pointerEvents = 'none'
+        video.style.webkitUserSelect = 'none'
+        video.style.userSelect = 'none'
+        ;(video.style as any).webkitTouchCallout = 'none'
+        
+        // Remove all event listeners that might trigger fullscreen
+        video.addEventListener('webkitbeginfullscreen', (e) => e.preventDefault())
+        video.addEventListener('webkitendfullscreen', (e) => e.preventDefault())
+        video.addEventListener('fullscreenchange', (e) => e.preventDefault())
+        video.addEventListener('webkitfullscreenchange', (e) => e.preventDefault())
+      })
     }
   }, [connect, isInitialized, isBrowser])
+
+  // Debug: listen to postMessage events from the D-ID embed
+  useEffect(() => {
+    if (!isBrowser) return
+    const handler = (event: MessageEvent) => {
+      try {
+        setLastEmbedEvent({ origin: event.origin, data: event.data })
+        const d: any = event.data
+        if (d && typeof d === 'object') {
+          if (Array.isArray(d.messages)) {
+            const converted = d.messages
+              .map((m: any) => ({ role: m.role, content: m.content }))
+              .filter((m: any) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+            if (converted.length) setEmbedMessages(converted)
+          } else if (d.role && d.content) {
+            if (d.role === 'user' || d.role === 'assistant') {
+              setEmbedMessages(prev => [...prev, { role: d.role, content: String(d.content) }])
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [isBrowser])
 
   // Scroll to bottom on new message
   useEffect(() => {
@@ -136,30 +197,65 @@ export default function VirtualAIAgentClient() {
     }
   }, [messages, pendingUserMessage, showThinking])
 
-  // Handle user input (text/voice) - show bubble immediately
+  // Handle user input (text/voice) - simplified to chat mode only
   const handleAction = async () => {
     const message = inputMessage.trim()
     if (!message || !isConnected || videoState !== 'STOP') return
+
+    // Show user message immediately
     setPendingUserMessage(message)
     setShowThinking(true)
     setInputMessage("")
+    
     // Reset transcript when sending message
     resetTranscript()
-    // Kirim ke agent
-    if (inputMode === 'chat') {
+    
+    try {
+      // Always use chat mode
+      console.log(`Chat: ("${message}")`)
       await chat(message)
-    } else if (inputMode === 'speak') {
-      await speak(message)
+    } catch (error) {
+      console.error('Error sending message:', error)
+    } finally {
+      setPendingUserMessage(null)
+      setShowThinking(false)
     }
-    setPendingUserMessage(null)
-    setShowThinking(false)
   }
 
-  // Handle voice input - put transcript in input field without auto-send
+  // Build and request conversation summary from API
+  const handleGetSummary = async () => {
+    try {
+      setSummaryLoading(true)
+      setSummaryText("")
+      // Prefer embed-captured messages if available; fallback to hook messages
+      const sourceMessages = embedMessages.length > 0
+        ? embedMessages
+        : messages.map(m => ({ role: m.role, content: m.content }))
+  setSummarySource(embedMessages.length > 0 ? 'embed' : (messages.length > 0 ? 'hook' : 'none'))
+      const payload = { messages: sourceMessages }
+      console.debug('Summary payload', { count: sourceMessages.length, source: embedMessages.length > 0 ? 'embed' : 'hook' })
+      const res = await fetch('/api/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Failed to summarize')
+      setSummaryText(data.summary || '')
+      setSummaryOpen(true)
+    } catch (e: any) {
+      setSummaryText(`Gagal membuat ringkasan: ${e?.message || e}`)
+      setSummaryOpen(true)
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
+  // Handle voice input - put transcript in input field like webSpeechAPI.js
   useEffect(() => {
     if (transcript && isConnected && videoState === 'STOP') {
       setInputMessage(transcript)
-      // Don't reset transcript here to allow accumulation
+      // In webSpeechAPI.js, transcript is accumulated in the textArea
     }
   }, [transcript, isConnected, videoState])
 
@@ -169,16 +265,53 @@ export default function VirtualAIAgentClient() {
       return
     }
     
-    toggleListening()
-    setIsRecording(!isRecording)
+    // Use the new handleSpeechToText function for consistency
+    handleSpeechToText()
   }
 
-  // Handle voice toggle like in index.html
-  const toggleVoiceChat = () => {
+  // Handle voice toggle like in index.html - REMOVED DUPLICATE
+
+  // Handle speech to text like webSpeechAPI.js - iOS optimized
+  const handleSpeechToText = (e?: React.MouseEvent | React.TouchEvent) => {
+    // Prevent any default behavior that might trigger video fullscreen on iOS
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    
+    if (!speechSupported) {
+      console.warn('Speech recognition not supported')
+      return
+    }
+    
+    if (isListening) {
+      // Stop listening and reset like webSpeechAPI.js reset function
+      stopListening()
+      setIsRecording(false)
+      setInputMessage("") // Clear on stop like webSpeechAPI.js
+    } else {
+      // Start listening and clear input like webSpeechAPI.js
+      setInputMessage("")
+      resetTranscript()
+      startListening()
+      setIsRecording(true)
+    }
+  }
+
+  // Voice toggle for continuous mode - iOS optimized
+  const toggleVoiceChat = (e?: React.MouseEvent | React.TouchEvent) => {
+    // Prevent any default behavior that might trigger video fullscreen on iOS
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    
     setIsVoiceChatMode(!isVoiceChatMode)
     if (!isVoiceChatMode) {
       // Start continuous voice chat
       if (!isListening) {
+        setInputMessage("")
+        resetTranscript()
         startListening()
       }
     } else {
@@ -186,29 +319,6 @@ export default function VirtualAIAgentClient() {
       if (isListening) {
         stopListening()
       }
-    }
-  }
-
-  // Handle speech to text like webSpeechAPI.js
-  const handleSpeechToText = () => {
-    if (!speechSupported) {
-      console.warn('Speech recognition not supported')
-      return
-    }
-    
-    if (isListening) {
-      if (isPaused) {
-        // Resume if paused
-        resumeListening()
-      } else {
-        // Pause if currently listening
-        pauseListening()
-      }
-    } else {
-      // Clear input and reset transcript when starting new recording
-      setInputMessage("")
-      resetTranscript()
-      startListening()
     }
   }
 
@@ -234,31 +344,50 @@ export default function VirtualAIAgentClient() {
     }
   }, [videoState, isListening, stopListening])
 
-  // Handle keyboard shortcuts like main.js
+  // Expose handleAction globally for webSpeechAPI.js compatibility
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Tab key to switch modes (like main.js)
-      if (event.key === 'Tab') {
-        event.preventDefault()
-        setInputMode(prev => prev === 'chat' ? 'speak' : 'chat')
+    if (typeof window !== 'undefined') {
+      (window as any).handleAction = handleAction
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).handleAction
       }
+    }
+  }, [handleAction])
+
+  // Handle keyboard shortcuts - simplified
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      // Only handle if connected
+      if (!isConnected) return
       
-      // Enter key to send message (like main.js) - only if character not talking
+      // Enter key to send message - only if character not talking
       if (event.key === 'Enter' && !event.shiftKey && videoState === 'STOP') {
         event.preventDefault()
         handleAction()
       }
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only handle if connected
+      if (!isConnected) return
       
       // ESC key to stop voice input
       if (event.key === 'Escape' && isListening) {
         event.preventDefault()
         stopListening()
+        console.log('Voice input stopped by ESC key')
       }
     }
 
-    if (isConnected) {
-      document.addEventListener('keydown', handleKeyDown)
-      return () => document.removeEventListener('keydown', handleKeyDown)
+    // Add event listeners like main.js
+    document.addEventListener('keypress', handleKeyPress)
+    document.addEventListener('keydown', handleKeyDown)
+    
+    return () => {
+      document.removeEventListener('keypress', handleKeyPress)
+      document.removeEventListener('keydown', handleKeyDown)
     }
   }, [isConnected, handleAction, videoState, isListening, stopListening])
 
@@ -386,6 +515,82 @@ export default function VirtualAIAgentClient() {
       {/* Header */}
       <header className="relative z-10 flex items-center justify-between p-3 md:p-6">
         <div className="flex items-center space-x-2 md:space-x-4">
+          {/* Get Summary */}
+          <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
+            <DialogTrigger asChild>
+              <Button 
+                variant="outline" 
+                onClick={handleGetSummary}
+        disabled={!isConnected || ((messages.length === 0) && (embedMessages.length === 0)) || summaryLoading}
+                className="text-white border-white/30 hover:bg-white/10 bg-transparent text-xs md:text-sm px-2 md:px-4"
+              >
+                {summaryLoading ? (
+                  <>
+                    <Loader2 className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2 animate-spin" />
+                    <span className="hidden sm:inline">Summarizing…</span>
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Get Summary</span>
+                  </>
+                )}
+              </Button>
+            </DialogTrigger>
+            {/* Quick open Debug without generating summary */}
+            <Button 
+              variant="ghost"
+              onClick={() => setSummaryOpen(true)}
+              className="text-white hover:bg-white/10 text-xs md:text-sm px-2 md:px-3"
+              title="Open debug panel"
+            >
+              Debug
+            </Button>
+            <DialogContent className="bg-white text-black">
+              <DialogHeader>
+                <DialogTitle>Chat Summary</DialogTitle>
+              </DialogHeader>
+              <div className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-sm space-y-3">
+                <div className="text-xs text-gray-500 flex items-center justify-between">
+                  <span>Messages: hook={messages.length} • embed={embedMessages.length} • using={summarySource}</span>
+                  <button
+                    className="text-blue-600 hover:underline"
+                    onClick={() => setShowDebug(v => !v)}
+                  >
+                    {showDebug ? 'Hide debug' : 'Show debug'}
+                  </button>
+                </div>
+                <div>{summaryText || 'No summary yet.'}</div>
+                {showDebug && (
+                  <div className="space-y-2 text-xs text-gray-700">
+                    <div className="font-semibold">Hook messages (sample up to 3):</div>
+                    <ul className="list-disc pl-4">
+                      {messages.slice(0,3).map((m,i) => (
+                        <li key={`h-${i}`}>[{m.role}] {m.content?.slice(0,120)}</li>
+                      ))}
+                      {messages.length === 0 && <li>Empty</li>}
+                    </ul>
+                    <div className="font-semibold">Embed messages (sample up to 3):</div>
+                    <ul className="list-disc pl-4">
+                      {embedMessages.slice(0,3).map((m,i) => (
+                        <li key={`e-${i}`}>[{m.role}] {m.content?.slice(0,120)}</li>
+                      ))}
+                      {embedMessages.length === 0 && <li>Empty</li>}
+                    </ul>
+                    <div className="font-semibold">Last embed event:</div>
+                    <pre className="bg-gray-100 p-2 rounded max-h-40 overflow-auto">
+{JSON.stringify(lastEmbedEvent, null, 2) || 'No event captured'}
+                    </pre>
+                    {summarySource === 'none' && (
+                      <div className="text-red-600">
+                        No messages detected. If you use only the embed, it may not expose messages via postMessage. Consider using the SDK hook (useDIDAgentDirect) or enabling message broadcasting in the embed, then try again.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
           <Button variant="ghost" size="icon" className="text-white hover:bg-white/10">
             <Menu className="h-5 w-5 md:h-6 md:w-6" />
           </Button>
@@ -412,7 +617,7 @@ export default function VirtualAIAgentClient() {
           </div>
         </div>
 
-        {/* Connection Status - Mobile responsive */}
+        {/* Connection Status - Like main.js connectionLabel */}
         <div className="flex items-center space-x-2 md:space-x-3">
           <div className={`w-2 h-2 md:w-3 md:h-3 rounded-full ${
             isConnected ? 'bg-green-400 animate-pulse' : 
@@ -420,9 +625,12 @@ export default function VirtualAIAgentClient() {
             'bg-red-400'
           }`} />
           <span className="text-white text-xs md:text-sm font-medium">
-            {connectionLabel || (isConnected ? 'Online' : isConnecting ? 'Connecting..' : 'Disconnected')}
+            {isConnecting ? 'Connecting..' : 
+             isConnected ? (connectionLabel || 'Connected') : 
+             connectionState === "disconnected" ? 'Want to continue where we left off?' :
+             'Disconnected'}
           </span>
-          {agent?.preview_name && (
+          {agent?.preview_name && isConnected && (
             <span className="hidden sm:inline text-white/70 text-xs md:text-sm">• {agent.preview_name}</span>
           )}
         </div>
@@ -471,9 +679,9 @@ export default function VirtualAIAgentClient() {
         </div>
       </header>
 
-      <div className="relative z-10 flex flex-col lg:flex-row h-[calc(100vh-100px)] md:h-[calc(100vh-120px)] px-2 md:px-6 pb-3 md:pb-6 gap-2 md:gap-4">
-        {/* Left Section: Sidebar + Chat Area - Mobile responsive */}
-        <div className="flex flex-col lg:flex-row w-full lg:w-[40%] xl:w-[35%] gap-2 md:gap-4">
+      <div className="relative z-10 flex flex-col lg:flex-row h-[calc(100dvh-90px)] md:h-[calc(100dvh-120px)] px-2 md:px-6 pb-3 md:pb-6 gap-2 md:gap-4">
+        {/* Left Section: Sidebar only (chatbox removed) */}
+        <div className="hidden lg:flex lg:flex-col lg:w-20 gap-2 md:gap-4">
           {/* Left sidebar (volume, etc) - Mobile responsive */}
           <div className="w-full lg:w-20 flex flex-row lg:flex-col items-center justify-center lg:justify-start space-x-4 lg:space-x-0 lg:space-y-6 bg-black/20 rounded-2xl p-2 lg:p-4 backdrop-blur-sm border border-white/10 min-h-[60px] lg:min-h-[400px]">
             <div className="flex items-center justify-center w-8 h-8 lg:w-10 lg:h-10 bg-[#3533CD]/20 rounded-full">
@@ -527,365 +735,43 @@ export default function VirtualAIAgentClient() {
               <Settings className="h-3 w-3 lg:h-4 lg:w-4" />
             </Button>
           </div>
-          
-          
-          {/* Chat Area - Mobile responsive */}
-          <div className="flex-1 flex flex-col bg-black/30 rounded-2xl p-3 lg:p-4 shadow-lg min-h-[250px] md:min-h-[350px] lg:min-h-[500px] border border-white/10">
-          {/* Error Display */}
-          {error && (
-            <Card className="p-4 mb-4 bg-red-500/20 border-red-500/30 backdrop-blur-sm">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <p className="text-red-200 text-sm flex-1">{error}</p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearError}
-                  className="text-red-200 hover:bg-red-500/20"
-                >
-                  ✕
-                </Button>
-              </div>
-            </Card>
-          )}
-          {/* Messages */}
-          <div
-            ref={chatContainerRef}
-            className="flex-1 space-y-4 overflow-y-auto mb-6 px-2 md:px-4 py-4 custom-scrollbar"
-            style={{ minHeight: 0, maxHeight: '60vh' }}
-          >
-            {/* Pending user message bubble (langsung muncul) */}
-            {pendingUserMessage && (
-              <div className="flex justify-end">
-                <div className="flex items-start space-x-3 max-w-lg">
-                  <div className="flex flex-col flex-1">
-                    <Card className="p-4 mb-4 bg-gradient-to-r from-[#1e2761] to-[#3a8dde] rounded-2xl shadow-lg border-0">
-                      <p className="text-white text-base leading-relaxed font-medium">{pendingUserMessage}</p>
-                    </Card>
-                  </div>
-                  <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
-                    <AvatarFallback className="bg-purple-500 text-white pointer-events-none select-none">U</AvatarFallback>
-                  </Avatar>
-                </div>
-              </div>
-            )}
-            {/* All messages */}
-            {messages.map((message, idx) => (
-              <div key={message.id + idx} className={`flex ${message.role === 'user' ? "justify-end" : "justify-start"}`}>
-                <div className={`flex items-start space-x-3 ${message.role === 'user' ? 'max-w-lg' : 'max-w-2xl'}`}>
-                  {message.role !== 'user' && (
-                    <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
-                      <AvatarImage 
-                        src={agent?.presenter?.preview_url || "/images/veco-character.png"} 
-                        className="pointer-events-none select-none"
-                        draggable={false}
-                      />
-                      <AvatarFallback className="pointer-events-none select-none">AI</AvatarFallback>
-                    </Avatar>
-                  )}
-                  <div className="flex flex-col flex-1">
-                    <Card
-                                            className={`${
-                         message.role === 'user'
-                           ? "p-4 mb-4 bg-gradient-to-r from-[#1e2761] to-[#3a8dde] rounded-2xl shadow-lg border-0"
-                           : "p-4 bg-black/40 text-white border-white/20 text-base md:text-lg shadow-md rounded-xl"
-                       }`}
-                    >
-                      {message.role === 'user' ? (
-                        <p className="text-white text-base leading-relaxed font-medium">{message.content}</p>
-                      ) : (
-                        <MarkdownRenderer 
-                          content={message.content} 
-                          className="text-base md:text-lg"
-                        />
-                      )}
-                    </Card>
-                    {/* Rating buttons */}
-                    {message.role === 'assistant' && (
-                      <div className="flex space-x-2 mt-2 justify-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => rate(message.id, 1)}
-                          className="text-white/60 hover:text-green-400 hover:bg-white/10"
-                          title="Rate positive"
-                        >
-                          👍
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => rate(message.id, -1)}
-                          className="text-white/60 hover:text-red-400 hover:bg-white/10"
-                          title="Rate negative"
-                        >
-                          👎
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  {message.role === 'user' && (
-                    <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
-                      <AvatarFallback className="bg-purple-500 text-white pointer-events-none select-none">U</AvatarFallback>
-                    </Avatar>
-                  )}
-                </div>
-              </div>
-            ))}
-            {/* AI thinking bubble */}
-            {showThinking && (
-              <div className="flex justify-start">
-                <div className="flex items-start space-x-3 max-w-2xl">
-                  <Avatar className="w-8 h-8 flex-shrink-0 pointer-events-none select-none">
-                    <AvatarImage 
-                      src={agent?.presenter?.preview_url || "/images/veco-character.png"} 
-                      className="pointer-events-none select-none"
-                      draggable={false}
-                    />
-                    <AvatarFallback className="pointer-events-none select-none">AI</AvatarFallback>
-                  </Avatar>
-                  <div className="flex flex-col flex-1">
-                    <Card className="p-4 bg-black/40 text-white border-white/20 text-base md:text-lg shadow-md flex items-center space-x-2">
-                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                      <span>AI is thinking...</span>
-                    </Card>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          {/* Input Area - Mobile responsive */}
-          <div className="mt-4 md:mt-8">
-            {/* Input Area with Voice Controls - Mobile responsive */}
-            <div className="flex items-center space-x-1 md:space-x-2">
-              <div className="flex-1 relative">
-                  <Input
-                  value={inputMessage || interimTranscript}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder={
-                    videoState !== 'STOP' ? "🎬 Character is speaking..." :
-                    isListening && !isPaused ? "🎤 Listening..." :
-                    isListening && isPaused ? "⏸️ Paused - Click mic to resume..." :
-                    !speechSupported ? "Type your message..." :
-                    isConnected ? `Type to ${inputMode === 'chat' ? 'chat' : 'speak'}...` : 
-                    "Connect to agent first..."
-                  }
-                  disabled={!isConnected || isLoading || (isListening && !isPaused) || videoState !== 'STOP'}
-                  className={`bg-black/40 border-[#3533CD]/30 text-white placeholder:text-white/60 pr-16 md:pr-24 text-sm md:text-base focus:border-[#3533CD] focus:ring-[#3533CD] disabled:opacity-50 ${
-                    isListening && !isPaused ? 'border-green-400 shadow-green-400/20 shadow-lg' : 
-                    isPaused ? 'border-yellow-400 shadow-yellow-400/20 shadow-lg' : ''
-                  } ${
-                    interimTranscript ? 'text-yellow-300' : ''
-                  }`}
-                  onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleAction()}
-                />                {/* Voice Controls - Mobile responsive */}
-                <div className="absolute right-1 top-1 flex space-x-0.5 md:space-x-1">
-                                    {/* Speech to Text Button */}
-                  {speechSupported && (
-                    <Button
-                      onClick={handleSpeechToText}
-                      size="icon"
-                      disabled={!isConnected || videoState !== 'STOP'}
-                      className={`h-6 w-6 md:h-8 md:w-8 ${
-                        isListening && !isPaused ? 'bg-green-600 hover:bg-green-700 animate-pulse' :
-                        isPaused ? 'bg-yellow-600 hover:bg-yellow-700' :
-                        'bg-gray-600 hover:bg-gray-700'
-                      } disabled:opacity-50`}
-                      title={
-                        videoState !== 'STOP' ? "Character is speaking, please wait" :
-                        isListening && !isPaused ? "Click to PAUSE listening" :
-                        isPaused ? "Click to RESUME listening" :
-                        "Speech to Text (Manual send after speaking)"
-                      }
-                    >
-                      {isListening && !isPaused ? (
-                        <div className="relative">
-                          <Mic className="h-3 w-3 md:h-4 md:w-4" />
-                        </div>
-                      ) : isPaused ? (
-                        <div className="h-3 w-3 md:h-4 md:w-4 bg-white rounded-sm" />
-                      ) : (
-                        <Mic className="h-3 w-3 md:h-4 md:w-4" />
-                      )}
-                    </Button>
-                  )}
-                  
-                  {/* Send Button */}
-                  <Button
-                    onClick={handleAction}
-                    size="icon"
-                    disabled={!isConnected || isLoading || (!inputMessage.trim() && !transcript) || videoState !== 'STOP'}
-                    className="h-6 w-6 md:h-8 md:w-8 bg-[#3533CD] hover:bg-[#3533CD]/80 disabled:opacity-50"
-                    title={
-                      videoState !== 'STOP' ? "Character is speaking, please wait" :
-                      `Send ${inputMode === 'chat' ? 'Chat' : 'Speak'} Message`
-                    }
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-3 w-3 md:h-4 md:w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-3 w-3 md:h-4 md:w-4" />
-                    )}
-                  </Button>
-                  
-                  {/* Send Button */}
-                  <Button
-                    onClick={handleAction}
-                    size="icon"
-                    disabled={!isConnected || isLoading || (!inputMessage.trim() && !transcript) || videoState !== 'STOP'}
-                    className="h-6 w-6 md:h-8 md:w-8 bg-[#3533CD] hover:bg-[#3533CD]/80 disabled:opacity-50"
-                    title={
-                      videoState !== 'STOP' ? "Character is speaking, please wait" :
-                      `Send ${inputMode === 'chat' ? 'Chat' : 'Speak'} Message`
-                    }
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-3 w-3 md:h-4 md:w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-3 w-3 md:h-4 md:w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            {/* Voice Status Indicator - Mobile responsive */}
-            {speechSupported && (isListening || isPaused || speechError || videoState !== 'STOP') && (
-              <div className="mt-2 text-center px-2">
-                {videoState !== 'STOP' && (
-                  <div className="flex items-center justify-center space-x-2 text-orange-400">
-                    <div className="w-2 h-2 bg-orange-400 rounded-full animate-pulse"></div>
-                    <span className="text-xs md:text-sm">🎬 Character is speaking...</span>
-                  </div>
-                )}
-                {isListening && !isPaused && videoState === 'STOP' && (
-                  <div className="flex flex-col items-center justify-center space-y-1 md:space-y-2">
-                    <div className="flex items-center space-x-2 text-green-400">
-                      <div className="w-2 h-2 bg-green-400 rounded-full animate-ping"></div>
-                      <span className="text-xs md:text-sm">🎤 Listening...</span>
-                    </div>
-                    <div className="text-[10px] md:text-xs text-white/60">
-                      Click 🎤 button to pause or press ESC to stop
-                    </div>
-                  </div>
-                )}
-                {isPaused && videoState === 'STOP' && (
-                  <div className="flex flex-col items-center justify-center space-y-1 md:space-y-2">
-                    <div className="flex items-center space-x-2 text-yellow-400">
-                      <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
-                      <span className="text-xs md:text-sm">⏸️ Recording Paused</span>
-                    </div>
-                    <div className="text-[10px] md:text-xs text-white/60">
-                      Click 🎤 button to resume recording
-                    </div>
-                  </div>
-                )}
-                {speechError && (
-                  <div className="text-red-400 text-xs md:text-sm">
-                    {speechError}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Keyboard Shortcuts Info - Mobile responsive */}
-            {isConnected && (
-              <div className="mt-2 text-center text-[10px] md:text-xs text-white/40 px-2">
-                <div className="hidden md:block">
-                  Tab: Switch mode • {videoState === 'STOP' ? 'Enter: Send' : 'Enter: Disabled'} • 
-                  {speechSupported ? (videoState === 'STOP' ? " Voice: Manual send" : " Voice: Disabled") : " Voice: Not supported"}
-                  {isListening && " • ESC: Stop voice"}
-                </div>
-                <div className="md:hidden">
-                  {videoState === 'STOP' ? 'Tap Send' : 'Character talking'} • 
-                  {speechSupported ? (videoState === 'STOP' ? "Voice: Manual send" : "Voice: Disabled") : "Voice: Not supported"}
-                </div>
-              </div>
-            )}
-          </div>
-          </div>
         </div>
 
-        {/* AI Character Display - Mobile responsive */}
+        {/* AI Character Display - replaced with D-ID Embed */}
         <div className="w-full lg:flex-1 lg:w-[60%] xl:w-[65%] flex flex-col justify-center h-full">
           <div className="flex items-center justify-center w-full h-full">
-            <div 
-              className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-2 md:border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-[300px] md:h-[400px] lg:h-full flex items-center justify-center transition-all duration-500 ${!isConnected ? 'blur-sm' : 'blur-0'}`}
+            <div
+              className={`relative rounded-2xl bg-gradient-to-br from-[#3533CD]/20 to-blue-400/20 border-2 md:border-4 border-[#3533CD]/30 shadow-2xl overflow-hidden w-full h-full flex items-center justify-center transition-all duration-500 ${!isConnected ? 'blur-sm' : 'blur-0'}`}
               style={{ 
-                backgroundImage: agent?.presenter?.thumbnail ? `url(${agent.presenter.thumbnail})` : undefined,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
-                pointerEvents: 'none' // Disable all click events including iOS popup
+                WebkitUserSelect: 'none',
+                userSelect: 'none',
+                WebkitTouchCallout: 'none',
+                WebkitTapHighlightColor: 'transparent'
               }}
             >
-                {/* D-ID Streaming Video - object-cover for zoom in and fit with card */}
-                <video
-                  ref={streamVideoRef}
-                  autoPlay
-                  playsInline
-                  muted={false}
-                  className="absolute inset-0 w-full h-full object-cover rounded-2xl z-20 transition-opacity duration-300"
-                  style={{ opacity: 0, pointerEvents: 'none' }}
-                />
-                {/* D-ID Idle Video - object-cover for zoom in and fit with card */}
-                <video
-                  ref={idleVideoRef}
-                  autoPlay
-                  loop
-                  muted={false}
-                  className="absolute inset-0 w-full h-full object-cover rounded-2xl z-10 transition-opacity duration-300"
-                  style={{ opacity: 0, pointerEvents: 'none' }}
-                />
-                {/* Background Image - object-cover for zoom in and fit with card */}
-                <img
-                  src={agent?.presenter?.thumbnail || agent?.presenter?.preview_url || "/images/veco-character.png"}
-                  alt={agent?.preview_name || "AI Character"}
-                  className="absolute inset-0 w-full h-full object-cover rounded-2xl z-0"
-                  style={{ pointerEvents: 'none' }}
-                  onError={e => { e.currentTarget.src = "/images/veco-character.png" }}
-                />
-                {/* Zoom-style overlay gradient */}
-                <div className="absolute inset-0 rounded-2xl bg-gradient-to-t from-black/20 via-transparent to-transparent pointer-events-none z-30" />
-                
-                {/* Video State Indicator - Zoom style */}
-                {videoState !== 'STOP' && (
-                  <div className="absolute top-4 left-4 bg-red-500/90 text-white text-xs py-1 px-3 rounded-lg shadow-lg z-40 flex items-center space-x-1">
-                    <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                    <span className="font-medium">LIVE</span>
-                  </div>
-                )}
-                
-                {/* Connection Status Indicator - Bottom left like Zoom */}
-                <div className="absolute bottom-4 left-4 z-40">
-                  <div className={`px-3 py-1 rounded-lg text-xs font-medium shadow-lg backdrop-blur-sm ${
-                    isConnected ? 'bg-green-500/80 text-white' : 
-                    isConnecting ? 'bg-yellow-500/80 text-white' : 
-                    'bg-red-500/80 text-white'
-                  }`}>
-                    {agent?.preview_name || 'AI AGENT'}
-                  </div>
-                </div>
-
-                {/* Audio/Mic indicator - Bottom right like Zoom */}
-                <div className="absolute bottom-4 right-4 z-40 flex space-x-2">
-                  {isListening && (
-                    <div className="bg-green-500/80 text-white p-2 rounded-lg shadow-lg">
-                      <Mic className="h-4 w-4" />
-                    </div>
-                  )}
-                  <div className={`p-2 rounded-lg shadow-lg ${
-                    volume[0] > 0 ? 'bg-blue-500/80 text-white' : 'bg-red-500/80 text-white'
-                  }`}>
-                    {volume[0] > 0 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                  </div>
-                </div>
-              </div>
+              {/* Target container for D-ID Agent embed */}
+              <div id="did-agent-root" className="absolute inset-0 w-full h-full" />
+              {/* Inject D-ID Agent script */}
+              <Script
+                src="https://agent.d-id.com/v2/index.js"
+                type="module"
+                strategy="afterInteractive"
+                data-mode="full"
+                data-client-key="YXV0aDB8Njg3N2FlY2I5ZGVmYjJmMDliODdjYzg3OmpTUE1Da09VRlliYV85WEdseEVqRw=="
+                data-agent-id="v2_agt_M5hi32Ap"
+                data-name="did-agent"
+                data-monitor="true"
+                data-target-id="did-agent-root"
+              />
             </div>
-            {/* Character Info and Status info removed as per user request */}
           </div>
         </div>
 
-      {/* Custom scrollbar and mobile slider styles */}
+      </div>
+
+      {/* Custom scrollbar and mobile slider styles + iOS video fix */}
       <style jsx global>{`
         .custom-scrollbar {
           scrollbar-width: thin;
@@ -923,6 +809,69 @@ export default function VirtualAIAgentClient() {
           cursor: pointer;
           border: 2px solid #ffffff;
           box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        /* iOS Video Fix - Prevent floating/fullscreen */
+        video {
+          -webkit-playsinline: true !important;
+          -webkit-touch-callout: none !important;
+          -webkit-user-select: none !important;
+          -webkit-tap-highlight-color: transparent !important;
+          pointer-events: none !important;
+        }
+        
+        video::-webkit-media-controls {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-start-playback-button {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-fullscreen-button {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-play-button {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-timeline {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-volume-slider {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-mute-button {
+          display: none !important;
+          -webkit-appearance: none !important;
+        }
+        
+        video::-webkit-media-controls-current-time-display {
+          display: none !important;
+        }
+        
+        video::-webkit-media-controls-time-remaining-display {
+          display: none !important;
+        }
+
+        /* Prevent iOS safari zoom on double tap */
+        * {
+          -webkit-touch-callout: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+        
+        button, input, textarea {
+          -webkit-touch-callout: none;
+          -webkit-tap-highlight-color: transparent;
         }
       `}</style>
     </div>

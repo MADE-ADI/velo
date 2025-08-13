@@ -1,14 +1,24 @@
 'use client'
 
+
 import { useSession, signIn } from 'next-auth/react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+
+const googleLoginEnabled = typeof process !== 'undefined' && process.env.NEXT_PUBLIC_GOOGLE_LOGIN_ENABLED !== undefined
+  ? process.env.NEXT_PUBLIC_GOOGLE_LOGIN_ENABLED === 'true'
+  : (typeof window !== 'undefined' ? (window as any).GOOGLE_LOGIN_ENABLED !== false : true);
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { status } = useSession()
 
   if (status === 'loading') {
     return null
+  }
+
+  // If Google login is disabled, always render children (no auth required)
+  if (!googleLoginEnabled) {
+    return <>{children}</>
   }
 
   return (
